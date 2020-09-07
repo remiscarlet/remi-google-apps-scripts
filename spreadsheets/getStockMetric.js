@@ -35,7 +35,6 @@ function buildAlphaVantageUrl(func_name, ticker_symbol, extra_params) {
 CACHE = CacheService.getScriptCache();
 DEFAULT_CACHE_TTL = 60;
 function getAlphaVantageData(func_name, ticker_symbol, extra_params = {}) {
-  // TODO: Figure out cache. Maybe need an actual cache server and not just CacheService?
   var url = buildAlphaVantageUrl(func_name, ticker_symbol, extra_params);
   var content = "";
   
@@ -78,6 +77,8 @@ function getAlphaVantageCrypto(ticker, market) {
   return getAlphaVantageData(func_name, ticker, params);
 }
 
+// Data manip helpers
+
 function extractNewestDataPoint(json_data) {
   var time_series_re = /Time Series/;
   for (var key_name in json_data) {
@@ -106,12 +107,12 @@ function extractNewestDataPoint(json_data) {
  */
 function cleanAVPriceObjKeynames(json_data) {
   var obj = {};
-  var key_extract_re = /\d+[a-z]?\.\s+(.*)/
+  var key_extract_re = /\d+[a-z]?\.\s+(.*)(?:\s+\(.*\))?/
   
   for (var key in json_data) {
     var cleaned_key = (key.match(key_extract_re) || [ "", "ERROR" ])[1];
     obj[cleaned_key] = json_data[key];
-    console.log({"cleaned_key": cleaned_key, "key": key});
+    console.log({"cleaned_key": cleaned_key, "key": key, 'val': obj[cleaned_key]});
   }  
   return obj;
 }
@@ -122,36 +123,60 @@ function extractLatestDataPointAsObj(json_data) {
   return obj;
 }
 
-// ========================= stocks
+API_FAILED_ERR = "[ERR: API FAILURE]";
+function generateCellArr(ticker, data) {
+  var cell_arr = []; // Array of cells to return which will represent cells of values in the sheet.
+  var val = parseFloat(data["close"]);
+  
+  cell_arr.push(isNaN(val) ? API_FAILED_ERR : val);
+  if (isNaN(val)) {
+    val = CACHE.get(ticker)
+  } else {
+    CACHE.put(ticker, val, 3600);
+  }
+  cell_arr.push(val);
+  
+  return cell_arr;
+}
+
+/** 
+ * A valid ticker symbol is defined by the regex: /^[A-Z]+$/
+ * This function sanitizes the ticker string so it validates for above regex.
+ * Will remove things like parenthesis, asterisks, and other human formatting helpers
+ * REQUIREMENT: Ticker string must start with true ticker string. Ie, only use custom suffixes and not prefixes.
+ */
+function sanitizeTickerStr(ticker) {
+  validation_re = /(^[A-Z]+)/;
+  if (validation_re.test(ticker)) {
+    return ticker.match(validation_re)[1];
+  } else {
+    throw Exception("Could not validate input ticker string as valid. Using regex: "+validation_re);
+  }
+}
+
+// ========================= stonks
 
 function getStockMetric(ticker) {
   console.log("getStockMetric(" + ticker + ")");
   console.log(typeof(ticker));
   var daily_data = extractLatestDataPointAsObj(getAlphaVantageDaily(ticker));
   //var intra_data = extractLatestDataPointAsObj(getAlphaVantageIntra(ticker));
-  
-  var cell_arr = []; // Array of cells to return which will represent cells of values in the sheet.
-  var val = parseFloat(daily_data["close"]);
-  cell_arr.push(isNaN(val) ? 0.0 : val);
-  cell_arr.push(isNaN(val) ? 0.0 : val);
-  
-  return cell_arr;
+
+  return generateCellArr(ticker, daily_data);
 }
 
 function getStockMetrics(tickers_arr) {
   rtn_data = [];
-  console.log(typeof(tickers_arr));
-  console.log(tickers_arr);
   if (typeof(tickers_arr) === "string") {
     tickers_arr = [[tickers_arr]];
-    console.log({"tickers_arr": tickers_arr});
   }
 
   tickers_arr.forEach((ticker) => {
     console.log("Getting metrics for... "+ticker);
-    data = getStockMetric(ticker[0])
-    console.log("Metrics: "+data);
+    var ticker_sanitized = sanitizeTickerStr(ticker[0]);
+    data = getStockMetric(ticker_sanitized)
     rtn_data.push(data);
+    console.log("Metrics: "+data);
   });
     
   return rtn_data;
@@ -167,13 +192,7 @@ function test_getStockMetrics() {
 
 function getCryptoMetric(ticker, market) {
   data = extractLatestDataPointAsObj(getAlphaVantageCrypto(ticker, market));
-  
-  var cell_arr = [];
-  var val = parseFloat(data[`close (${market})`]);
-  cell_arr.push(isNaN(val) ? 0.0 : val);
-  cell_arr.push(isNaN(val) ? 0.0 : val);
-
-  return cell_arr;
+  return generateCellArr(ticker, data);
 }
 
 function getCryptoMetrics(tickers_arr, market="USD") {
@@ -185,9 +204,10 @@ function getCryptoMetrics(tickers_arr, market="USD") {
   
   tickers_arr.forEach((ticker) => {
     console.log("Getting metrics for... "+ticker);
-    data = getCryptoMetric(ticker[0], market);
-    console.log("Metrics: "+data);
+    var ticker_sanitized = sanitizeTickerStr(ticker[0]);
+    data = getCryptoMetric(ticker_sanitized, market);
     rtn_data.push(data);
+    console.log("Metrics: "+data);
   });
   
   return rtn_data;
